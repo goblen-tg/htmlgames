@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Doodle Jump: Mobile & PC Edition</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a1a1a; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Segoe UI', sans-serif; touch-action: none; }
+        #game-container { position: relative; user-select: none; border: 6px solid #333; border-radius: 20px; box-shadow: 0 0 50px rgba(0,0,0,0.5); background: #faf8ef; }
+        canvas { display: block; border-radius: 14px; cursor: pointer; max-width: 100vw; max-height: 100vh; }
+        
+        #ui-layer { position: absolute; top: 15px; left: 15px; pointer-events: none; z-index: 5; }
+        .score-text { color: #555; font-size: clamp(24px, 5vw, 32px); font-weight: 900; margin: 0; }
+        .coins-text { color: #ffc107; font-size: clamp(16px, 4vw, 20px); font-weight: bold; margin: 0; }
+
+        /* Сенсорные кнопки */
+        .touch-controls { position: absolute; bottom: 20px; width: 100%; display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; pointer-events: none; opacity: 0.5; }
+        .touch-btn { width: 70px; height: 70px; background: rgba(0,0,0,0.2); border-radius: 50%; pointer-events: auto; display: flex; justify-content: center; align-items: center; color: white; font-size: 30px; border: 2px solid white; -webkit-tap-highlight-color: transparent; }
+        .touch-btn:active { background: rgba(0,0,0,0.4); transform: scale(0.9); }
+
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 255, 255, 0.98); display: none; flex-direction: column; justify-content: center; align-items: center; border-radius: 14px; z-index: 10; padding: 20px; box-sizing: border-box; text-align: center; }
+        
+        /* Магазин */
+        .shop-tabs { display: flex; gap: 10px; margin-bottom: 15px; }
+        .tab-btn { padding: 8px 15px; border: none; border-radius: 10px; cursor: pointer; background: #ddd; font-weight: bold; }
+        .tab-btn.active { background: #4caf50; color: white; }
+        .shop-content { width: 100%; height: 280px; overflow-y: auto; display: none; }
+        .shop-content.active { display: block; }
+        .shop-card { background: white; border: 2px solid #eee; border-radius: 12px; padding: 12px; margin-bottom: 10px; display: flex; align-items: center; justify-content: space-between; }
+        .shop-card.selected { border-color: #4caf50; background: #f1f8e9; }
+        
+        button.main-btn { margin-top: 10px; padding: 12px 25px; font-size: 18px; font-weight: bold; background: #4caf50; color: white; border: none; border-radius: 50px; cursor: pointer; box-shadow: 0 5px 0 #2e7d32; min-width: 180px; }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="ui-layer">
+            <p class="score-text" id="score">0</p>
+            <p class="coins-text">💰 <span id="coins-count">0</span></p>
+        </div>
+        
+        <canvas id="gameCanvas"></canvas>
+
+        <div id="mobile-ui" class="touch-controls">
+            <div class="touch-btn" id="left-btn">←</div>
+            <div class="touch-btn" id="right-btn">→</div>
+        </div>
+
+        <div id="game-over" class="overlay">
+            <h1 id="death-reason" style="color:#f44336; margin: 0;">GAME OVER</h1>
+            <p style="font-size: 20px;">Счёт: <b id="final-score">0</b></p>
+            <button class="main-btn" id="restart-btn">ИГРАТЬ</button>
+            <button class="main-btn" id="open-shop-btn" style="background:#2196f3; box-shadow: 0 5px 0 #1565c0;">МАГАЗИН</button>
+        </div>
+
+        <div id="shop-screen" class="overlay">
+            <h2>МАГАЗИН</h2>
+            <p>💰 <b id="shop-balance">0</b></p>
+            <div class="shop-tabs">
+                <button class="tab-btn active" id="btn-tab-skins">Скины</button>
+                <button class="tab-btn" id="btn-tab-maps">Карты</button>
+            </div>
+            <div id="skins-tab" class="shop-content active"></div>
+            <div id="maps-tab" class="shop-content"></div>
+            <button class="main-btn" id="close-shop-btn" style="background:#666; box-shadow: 0 5px 0 #333;">НАЗАД</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Адаптация размера
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        canvas.width = 400; 
+        canvas.height = 600;
+
+        let wallet = parseInt(localStorage.getItem('dCoins')) || 0;
+        let unlocked = JSON.parse(localStorage.getItem('dUnlocked')) || ['s_classic', 'm_paper'];
+        let curSkin = localStorage.getItem('dSkin') || 's_classic';
+        let curMap = localStorage.getItem('dMap') || 'm_paper';
+
+        const shopItems = {
+            skins: { 's_classic': { name: 'Стандарт', color: '#c9e265', price: 0, mult: 1 }, 's_ninja': { name: 'Ниндзя', color: '#333', price: 150, mult: 1.5 }, 's_gold': { name: 'Золото', color: '#ffc107', price: 500, mult: 3.0 } },
+            maps: { 'm_paper': { name: 'Тетрадь', color: '#faf8ef', price: 0, mult: 1 }, 'm_night': { name: 'Полночь', color: '#1a1a2e', price: 200, mult: 1.3 }, 'm_forest': { name: 'Джунгли', color: '#2d4a22', price: 400, mult: 1.8 } }
+        };
+
+        let score=0, camY=0, gameActive=true, platforms=[], floatingTexts=[], blackHoles=[];
+        const keys = { left: false, right: false };
+        const p = { x: 180, y: 300, yPrev: 300, w: 38, h: 38, dx: 0, dy: 0, grav: 0.46, jump: -12.5, helicopter: 0 };
+
+        function playSnd(freq, dur=0.1, type='triangle') {
+            try {
+                const osc = audioCtx.createOscillator();
+                const g = audioCtx.createGain();
+                osc.type = type; osc.connect(g); g.connect(audioCtx.destination);
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                g.gain.setValueAtTime(0.04, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + dur);
+                osc.start(); osc.stop(audioCtx.currentTime + dur);
+            } catch(e){}
+        }
+
+        function createPlat(y) {
+            let newX = Math.random() * 330;
+            let type = 'normal';
+            if (Math.random() < 0.16 && score > 500) type = 'brown';
+            else if (Math.random() < 0.16 && score > 800) type = 'blue';
+            let item = null; const ir = Math.random();
+            if (ir < 0.10 && score > 400) item = 'helicopter';
+            else if (ir < 0.25) item = 'coin';
+            else if (ir < 0.33) item = 'spring';
+            return { x: newX, y: y, w: 65, h: 14, type, item, dir: Math.random() > 0.5 ? 1 : -1, broken: false, bY: 0, springActive: false, animOffset: Math.random()*10 };
+        }
+
+        function init() {
+            platforms = []; floatingTexts = []; blackHoles = [];
+            score = 0; camY = 0; p.y = 300; p.yPrev = 300; p.dy = 0; p.helicopter = 0; p.x = 180;
+            platforms.push({ x: 150, y: 550, w: 100, h: 15, type: 'normal', item: null, dir: 1, broken: false, bY: 0, springActive: false });
+            for(let i = 1; i < 18; i++) platforms.push(createPlat(550 - i * 50));
+            document.getElementById('coins-count').innerText = wallet;
+            if(!isMobile) document.getElementById('mobile-ui').style.display = 'none';
+        }
+
+        function update() {
+            if(!gameActive) return;
+            p.yPrev = p.y;
+            if(keys.left) p.dx = -7.5; else if(keys.right) p.dx = 7.5; else p.dx *= 0.82;
+            if(p.helicopter > 0) { p.dy = -11.5; p.helicopter--; if(p.helicopter % 5 === 0) playSnd(550, 0.04, 'sawtooth'); } 
+            else { p.dy += p.grav; }
+            p.x += p.dx; p.y += p.dy;
+            if(p.x > 400) p.x = -p.w; if(p.x < -p.w) p.x = 400;
+
+            if(p.y < 260) {
+                let diff = 260 - p.y; p.y = 260; p.yPrev += diff; camY += diff;
+                score = Math.floor(camY/10); document.getElementById('score').innerText = score;
+                platforms.forEach((pl, i) => {
+                    pl.y += diff;
+                    if(pl.y > 630) { let highestY = Math.min(...platforms.map(p => p.y)); platforms[i] = createPlat(highestY - 50); }
+                });
+                blackHoles.forEach((bh, i) => { bh.y += diff; if(bh.y > 650) blackHoles.splice(i, 1); });
+                floatingTexts.forEach(ft => ft.y += diff);
+                if(score > 2000 && Math.random() < 0.0025 && blackHoles.length === 0) blackHoles.push({ x: Math.random()*300+50, y: -100, r: 28 });
+            }
+
+            platforms.forEach(pl => {
+                if(pl.type === 'blue') { pl.x += 1.8 * pl.dir; if(pl.x < 0 || pl.x > 335) pl.dir *= -1; }
+                if(pl.broken) { pl.bY += 0.8; pl.y += pl.bY; return; }
+                if (p.dy > 0) {
+                    const footY = p.y + p.h, footYPrev = p.yPrev + p.h;
+                    if (footYPrev <= pl.y + 10 && footY >= pl.y) {
+                        if (p.x + p.w * 0.8 > pl.x && p.x + p.w * 0.2 < pl.x + pl.w) {
+                            if(pl.type === 'brown') { pl.broken = true; playSnd(150, 0.2, 'square'); }
+                            if(pl.item === 'spring') { p.dy = -25; pl.springActive = true; playSnd(850, 0.3, 'sine'); }
+                            else if(pl.item === 'helicopter') { p.helicopter = 160; pl.item = null; playSnd(450, 0.6, 'sawtooth'); }
+                            else if(pl.item === 'coin') {
+                                const m = shopItems.skins[curSkin].mult * shopItems.maps[curMap].mult;
+                                const gain = Math.round(1 * m); wallet += gain; pl.item = null;
+                                floatingTexts.push({ x: p.x, y: p.y, text: `+${gain}`, op: 1, life: 50 });
+                                playSnd(1250, 0.1, 'sine'); save(); p.dy = p.jump;
+                            } else { p.dy = p.jump; if(pl.type !== 'brown') playSnd(420); }
+                            p.y = pl.y - p.h;
+                        }
+                    }
+                }
+            });
+
+            floatingTexts = floatingTexts.filter(ft => { ft.y -= 1.2; ft.op -= 0.02; ft.life--; return ft.life > 0; });
+            if(p.y > 650) { gameActive = false; document.getElementById('death-reason').innerText = "ВЫ УПАЛИ"; showGameOver(); }
+        }
+
+        function draw() {
+            ctx.fillStyle = shopItems.maps[curMap].color; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            blackHoles.forEach(bh => {
+                const g = ctx.createRadialGradient(bh.x, bh.y, 4, bh.x, bh.y, bh.r);
+                g.addColorStop(0, '#000'); g.addColorStop(1, '#4b0082');
+                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(bh.x, bh.y, bh.r, 0, 7); ctx.fill();
+            });
+            platforms.forEach(pl => {
+                ctx.fillStyle = pl.type==='blue' ? '#4fc3f7' : (pl.type==='brown' ? '#8d6e63' : '#8bc34a');
+                ctx.beginPath(); ctx.roundRect(pl.x, pl.y, pl.w, pl.h, 6); ctx.fill();
+                if(pl.item === 'spring') { ctx.fillStyle = '#9e9e9e'; let sH = pl.springActive ? 18 : 7; ctx.fillRect(pl.x + (pl.w/2 - 10), pl.y - sH, 20, sH); }
+                else if(pl.item === 'coin') { const bounce = Math.sin(Date.now() / 200 + pl.animOffset) * 4; const cx = pl.x + (pl.w/2), cy = pl.y - 15 + bounce; ctx.fillStyle = '#ffc107'; ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.fill(); }
+                else if(pl.item === 'helicopter') { ctx.fillStyle = '#ff5722'; ctx.fillRect(pl.x + (pl.w/2 - 10), pl.y - 12, 20, 12); ctx.fillStyle = '#333'; ctx.fillRect(pl.x + (pl.w/2 - 15), pl.y - 14, 30, 3); }
+            });
+            ctx.save(); ctx.translate(p.x + p.w/2, p.y + p.h/2);
+            ctx.fillStyle = shopItems.skins[curSkin].color; ctx.beginPath(); ctx.roundRect(-p.w/2, -p.h/2, p.w, p.h, 10); ctx.fill();
+            if(p.helicopter > 0) { ctx.fillStyle = '#333'; const propW = p.w * 1.3 * Math.sin(Date.now() / 15); ctx.fillRect(-propW/2, -35, propW, 5); ctx.fillRect(-2, -30, 4, 10); }
+            ctx.fillStyle = '#000'; ctx.beginPath(); ctx.arc(-7, -7, 3, 0, 7); ctx.arc(7, -7, 3, 0, 7); ctx.fill();
+            ctx.restore();
+            floatingTexts.forEach(ft => { ctx.fillStyle = `rgba(255, 193, 7, ${ft.op})`; ctx.font = "bold 20px Arial"; ctx.fillText(ft.text, ft.x, ft.y); });
+        }
+
+        // Интерфейс
+        function renderShop() {
+            document.getElementById('shop-balance').innerText = wallet;
+            const drawCat = (cat, id, cur) => {
+                const el = document.getElementById(id); el.innerHTML = '';
+                for(let k in shopItems[cat]) {
+                    const item = shopItems[cat][k]; const bought = unlocked.includes(k);
+                    const card = document.createElement('div'); card.className = `shop-card ${cur === k ? 'selected' : ''}`;
+                    card.innerHTML = `<div><b>${item.name}</b><br><small>x${item.mult}</small></div><div>${bought ? 'ВЫБРАТЬ' : '💰'+item.price}</div>`;
+                    card.onclick = () => { if(bought) { if(cat === 'skins') curSkin = k; else curMap = k; } else if(wallet >= item.price) { wallet -= item.price; unlocked.push(k); if(cat === 'skins') curSkin = k; else curMap = k; } save(); renderShop(); };
+                    el.appendChild(card);
+                }
+            };
+            drawCat('skins', 'skins-tab', curSkin); drawCat('maps', 'maps-tab', curMap);
+        }
+
+        function save() { localStorage.setItem('dUnlocked', JSON.stringify(unlocked)); localStorage.setItem('dSkin', curSkin); localStorage.setItem('dMap', curMap); localStorage.setItem('dCoins', wallet); document.getElementById('coins-count').innerText = wallet; }
+        function showGameOver() { document.getElementById('final-score').innerText = score; document.getElementById('game-over').style.display = 'flex'; }
+        
+        // Кнопки и события
+        document.getElementById('restart-btn').onclick = () => { document.getElementById('game-over').style.display = 'none'; gameActive = true; init(); loop(); };
+        document.getElementById('open-shop-btn').onclick = () => { document.getElementById('game-over').style.display = 'none'; document.getElementById('shop-screen').style.display = 'flex'; renderShop(); };
+        document.getElementById('close-shop-btn').onclick = () => { document.getElementById('shop-screen').style.display = 'none'; document.getElementById('game-over').style.display = 'flex'; };
+        document.getElementById('btn-tab-skins').onclick = () => { switchTab('skins'); };
+        document.getElementById('btn-tab-maps').onclick = () => { switchTab('maps'); };
+        function switchTab(t) { document.getElementById('skins-tab').classList.toggle('active', t==='skins'); document.getElementById('maps-tab').classList.toggle('active', t==='maps'); document.getElementById('btn-tab-skins').classList.toggle('active', t==='skins'); document.getElementById('btn-tab-maps').classList.toggle('active', t==='maps'); }
+
+        // УПРАВЛЕНИЕ: КЛАВИАТУРА
+        window.onkeydown = (e) => { if(e.code==='ArrowLeft'||e.code==='KeyA') keys.left=true; if(e.code==='ArrowRight'||e.code==='KeyD') keys.right=true; };
+        window.onkeyup = (e) => { if(e.code==='ArrowLeft'||e.code==='KeyA') keys.left=false; if(e.code==='ArrowRight'||e.code==='KeyD') keys.right=false; };
+
+        // УПРАВЛЕНИЕ: ТАЧ-КНОПКИ
+        const L = document.getElementById('left-btn'), R = document.getElementById('right-btn');
+        const startL = (e) => { keys.left = true; e.preventDefault(); };
+        const endL = (e) => { keys.left = false; e.preventDefault(); };
+        const startR = (e) => { keys.right = true; e.preventDefault(); };
+        const endR = (e) => { keys.right = false; e.preventDefault(); };
+        
+        L.addEventListener('touchstart', startL); L.addEventListener('touchend', endL);
+        R.addEventListener('touchstart', startR); R.addEventListener('touchend', endR);
+        // Для теста на ПК через мышку
+        L.addEventListener('mousedown', () => keys.left = true); L.addEventListener('mouseup', () => keys.left = false);
+        R.addEventListener('mousedown', () => keys.right = true); R.addEventListener('mouseup', () => keys.right = false);
+
+        init();
+        function loop() { if(!gameActive) return; update(); draw(); requestAnimationFrame(loop); }
+        loop();
+    </script>
+</body>
+</html>
